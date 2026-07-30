@@ -12,9 +12,10 @@ pipeline {
 
     environment {
         COMPOSE_FILE = "compose.dev.yaml"
+        COMPOSE_CI_FILE = "compose.ci.yaml"
+        COMPOSE_PROJECT_NAME = "hotel-ci"
         WORKSPACE_SERVICE = "workspace"
         DB_SERVICE = "postgres"
-        APP_URL = "http://localhost"
     }
 
     stages {
@@ -45,6 +46,11 @@ pipeline {
                     echo "ERROR: ${COMPOSE_FILE} not found."
                     exit 1
                 fi
+
+                if [ ! -f "${COMPOSE_CI_FILE}" ]; then
+                    echo "ERROR: ${COMPOSE_CI_FILE} not found."
+                    exit 1
+                fi
                 '''
             }
         }
@@ -58,6 +64,14 @@ pipeline {
                     echo "Creating .env..."
                     cp .env.example .env
                 fi
+
+                # Ensure database settings match the Docker Compose PostgreSQL service.
+                sed -i 's/^DB_CONNECTION=.*/DB_CONNECTION=pgsql/' .env
+                sed -i 's/^DB_HOST=.*/DB_HOST=postgres/' .env
+                sed -i 's/^DB_PORT=.*/DB_PORT=5432/' .env
+                sed -i 's/^DB_DATABASE=.*/DB_DATABASE=app/' .env
+                sed -i 's/^DB_USERNAME=.*/DB_USERNAME=laravel/' .env
+                sed -i 's/^DB_PASSWORD=.*/DB_PASSWORD=secret/' .env
                 '''
             }
         }
@@ -67,7 +81,7 @@ pipeline {
                 sh '''
                 set -e
 
-                docker compose -f ${COMPOSE_FILE} build --no-cache
+                docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} build --no-cache
                 '''
             }
         }
@@ -77,7 +91,13 @@ pipeline {
                 sh '''
                 set -e
 
-                docker compose -f ${COMPOSE_FILE} up -d
+                # Remove leftover containers from previous runs (default and CI project names).
+                docker compose -f ${COMPOSE_FILE} down --remove-orphans || true
+                docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} \
+                    -p ${COMPOSE_PROJECT_NAME} down --remove-orphans || true
+
+                docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} \
+                    -p ${COMPOSE_PROJECT_NAME} up -d
                 '''
             }
         }
@@ -91,7 +111,7 @@ pipeline {
 
                 for i in $(seq 1 60)
                 do
-                    if docker compose -f ${COMPOSE_FILE} exec -T ${DB_SERVICE} \
+                    if docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} -p ${COMPOSE_PROJECT_NAME} exec -T ${DB_SERVICE} \
                         pg_isready -U laravel >/dev/null 2>&1
                     then
                         echo "PostgreSQL is ready."
@@ -112,10 +132,10 @@ pipeline {
                 sh '''
                 set -e
 
-                docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} \
+                docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} -p ${COMPOSE_PROJECT_NAME} exec -T ${WORKSPACE_SERVICE} \
                     git config --global --add safe.directory /var/www
 
-                docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} \
+                docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} -p ${COMPOSE_PROJECT_NAME} exec -T ${WORKSPACE_SERVICE} \
                 sh -c '
                     if [ ! -d vendor ]; then
                         composer install \
@@ -127,7 +147,7 @@ pipeline {
                     fi
                 '
 
-                docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} \
+                docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} -p ${COMPOSE_PROJECT_NAME} exec -T ${WORKSPACE_SERVICE} \
                 sh -c '
                     if [ ! -d node_modules ]; then
                         npm install
@@ -144,10 +164,10 @@ pipeline {
                 sh '''
                 set -e
 
-                docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} \
+                docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} -p ${COMPOSE_PROJECT_NAME} exec -T ${WORKSPACE_SERVICE} \
                     php artisan key:generate --force
 
-                docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} \
+                docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} -p ${COMPOSE_PROJECT_NAME} exec -T ${WORKSPACE_SERVICE} \
                     php artisan storage:link || true
                 '''
             }
@@ -158,7 +178,7 @@ pipeline {
                 sh '''
                 set -e
 
-                docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} \
+                docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} -p ${COMPOSE_PROJECT_NAME} exec -T ${WORKSPACE_SERVICE} \
                     npm run build
                 '''
             }
@@ -169,7 +189,7 @@ pipeline {
                 sh '''
                 set -e
 
-                docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} \
+                docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} -p ${COMPOSE_PROJECT_NAME} exec -T ${WORKSPACE_SERVICE} \
                     php artisan migrate --force
                 '''
             }
@@ -180,16 +200,16 @@ pipeline {
                 sh '''
                 set -e
 
-                docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} \
+                docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} -p ${COMPOSE_PROJECT_NAME} exec -T ${WORKSPACE_SERVICE} \
                     php artisan optimize
 
-                docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} \
+                docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} -p ${COMPOSE_PROJECT_NAME} exec -T ${WORKSPACE_SERVICE} \
                     php artisan config:cache
 
-                docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} \
+                docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} -p ${COMPOSE_PROJECT_NAME} exec -T ${WORKSPACE_SERVICE} \
                     php artisan route:cache
 
-                docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} \
+                docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} -p ${COMPOSE_PROJECT_NAME} exec -T ${WORKSPACE_SERVICE} \
                     php artisan view:cache
                 '''
             }
@@ -200,7 +220,7 @@ pipeline {
                 sh '''
                 set -e
 
-                docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} \
+                docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} -p ${COMPOSE_PROJECT_NAME} exec -T ${WORKSPACE_SERVICE} \
                     php artisan test
                 '''
             }
@@ -215,7 +235,8 @@ pipeline {
 
                 sleep 10
 
-                curl -f ${APP_URL}
+                docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} -p ${COMPOSE_PROJECT_NAME} \
+                    exec -T web curl -f http://127.0.0.1
                 '''
             }
         }
@@ -237,18 +258,18 @@ pipeline {
                 echo "======================================"
 
                 sh '''
-                if [ -f "${COMPOSE_FILE}" ]; then
+                if [ -f "${COMPOSE_FILE}" ] && [ -f "${COMPOSE_CI_FILE}" ]; then
 
-                    docker compose -f ${COMPOSE_FILE} ps || true
+                    docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} -p ${COMPOSE_PROJECT_NAME} ps || true
 
                     echo ""
                     echo "========== LAST 100 LOGS =========="
 
-                    docker compose -f ${COMPOSE_FILE} logs --tail=100 || true
+                    docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} -p ${COMPOSE_PROJECT_NAME} logs --tail=100 || true
 
                 else
 
-                    echo "${COMPOSE_FILE} not found."
+                    echo "Compose files not found."
 
                 fi
                 '''
@@ -258,6 +279,14 @@ pipeline {
         always {
             sh '''
             docker image prune -f
+            '''
+        }
+
+        cleanup {
+            sh '''
+            docker compose -f ${COMPOSE_FILE} down --remove-orphans || true
+            docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} \
+                -p ${COMPOSE_PROJECT_NAME} down --remove-orphans || true
             '''
 
             cleanWs(

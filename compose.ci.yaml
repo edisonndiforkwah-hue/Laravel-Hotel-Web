@@ -1,0 +1,9 @@
+# CI override: do not publish service ports on the Jenkins agent.
+# Commands run via `docker compose exec`; smoke tests use the internal network.
+services:
+  web:
+    ports: !reset []
+  workspace:
+    ports: !reset []
+  postgres:
+    ports: !reset []
