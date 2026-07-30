@@ -148,7 +148,7 @@ pipeline {
                 '
 
                 docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} -p ${COMPOSE_PROJECT_NAME} exec -T ${WORKSPACE_SERVICE} \
-                sh -c '
+                bash -lc '
                     if [ ! -d node_modules ]; then
                         npm install
                     else
@@ -179,7 +179,7 @@ pipeline {
                 set -e
 
                 docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} -p ${COMPOSE_PROJECT_NAME} exec -T ${WORKSPACE_SERVICE} \
-                    npm run build
+                    bash -lc 'npm run build'
                 '''
             }
         }
@@ -233,10 +233,20 @@ pipeline {
 
                 echo "Waiting for Nginx..."
 
-                sleep 10
+                for i in $(seq 1 30)
+                do
+                    if docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} -p ${COMPOSE_PROJECT_NAME} \
+                        exec -T ${WORKSPACE_SERVICE} php -r "exit(@file_get_contents('http://web') === false ? 1 : 0);"
+                    then
+                        echo "Smoke test passed."
+                        exit 0
+                    fi
 
-                docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_CI_FILE} -p ${COMPOSE_PROJECT_NAME} \
-                    exec -T web curl -f http://127.0.0.1
+                    sleep 2
+                done
+
+                echo "ERROR: Smoke test failed."
+                exit 1
                 '''
             }
         }
