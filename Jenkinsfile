@@ -220,13 +220,7 @@ pipeline {
             }
         }
 
-        stage('Docker Cleanup') {
-            steps {
-                sh '''
-                docker image prune -f
-                '''
-            }
-        }
+        
     }
 
     post {
@@ -259,6 +253,13 @@ pipeline {
                     echo "${COMPOSE_FILE} not found."
 
                 fi
+                '''
+            }
+        }
+        stage('Docker Cleanup') {
+            steps {
+                sh '''
+                docker image prune -f
                 '''
             }
         }
