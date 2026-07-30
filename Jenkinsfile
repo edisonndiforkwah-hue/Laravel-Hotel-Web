@@ -3,7 +3,6 @@ pipeline {
 
     options {
         timestamps()
-        ansiColor('xterm')
         disableConcurrentBuilds()
         buildDiscarder(logRotator(
             numToKeepStr: '20',
@@ -14,6 +13,7 @@ pipeline {
     environment {
         COMPOSE_FILE = "compose.dev.yaml"
         WORKSPACE_SERVICE = "workspace"
+        DB_SERVICE = "postgres"
         APP_URL = "http://localhost"
     }
 
@@ -25,25 +25,48 @@ pipeline {
             }
         }
 
-        stage('Verify Environment') {
+        stage('Verify Workspace') {
             steps {
                 sh '''
-                echo "========== SYSTEM INFO =========="
+                set -e
+
+                echo "===== SYSTEM INFO ====="
                 whoami
                 pwd
 
                 docker --version
                 docker compose version
 
-                echo "========== WORKSPACE =========="
+                echo ""
+                echo "===== PROJECT FILES ====="
                 ls -la
+
+                if [ ! -f "${COMPOSE_FILE}" ]; then
+                    echo "ERROR: ${COMPOSE_FILE} not found."
+                    exit 1
+                fi
                 '''
             }
         }
 
-        stage('Build Docker Images') {
+        stage('Prepare Environment') {
             steps {
                 sh '''
+                set -e
+
+                if [ ! -f .env ]; then
+                    echo "Creating .env..."
+                    cp .env.example .env
+                fi
+                '''
+            }
+        }
+
+        stage('Build Images') {
+            steps {
+                sh '''
+                set -e
+
                 docker compose -f ${COMPOSE_FILE} build --no-cache
                 '''
             }
@@ -52,41 +75,80 @@ pipeline {
         stage('Start Containers') {
             steps {
                 sh '''
+                set -e
+
                 docker compose -f ${COMPOSE_FILE} up -d
                 '''
             }
         }
 
-        stage('Wait for Services') {
+        stage('Wait For PostgreSQL') {
             steps {
                 sh '''
+                set -e
+
                 echo "Waiting for PostgreSQL..."
 
-                for i in $(seq 1 30); do
-                    docker compose -f ${COMPOSE_FILE} exec -T postgres pg_isready && exit 0
+                for i in $(seq 1 60)
+                do
+                    if docker compose -f ${COMPOSE_FILE} exec -T ${DB_SERVICE} \
+                        pg_isready -U laravel >/dev/null 2>&1
+                    then
+                        echo "PostgreSQL is ready."
+                        exit 0
+                    fi
+
                     sleep 2
                 done
 
-                echo "Database did not become ready."
+                echo "ERROR: PostgreSQL failed to start."
                 exit 1
                 '''
             }
         }
 
-        stage('Prepare Laravel') {
+        stage('Install Dependencies') {
             steps {
                 sh '''
+                set -e
+
                 docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} \
                     git config --global --add safe.directory /var/www
 
                 docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} \
-                    composer install --no-interaction --prefer-dist --optimize-autoloader
+                sh -c '
+                    if [ ! -d vendor ]; then
+                        composer install \
+                            --no-interaction \
+                            --prefer-dist \
+                            --optimize-autoloader
+                    else
+                        echo "vendor already exists."
+                    fi
+                '
 
                 docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} \
-                    cp .env.example .env || true
+                sh -c '
+                    if [ ! -d node_modules ]; then
+                        npm install
+                    else
+                        echo "node_modules already exists."
+                    fi
+                '
+                '''
+            }
+        }
+
+        stage('Laravel Setup') {
+            steps {
+                sh '''
+                set -e
 
                 docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} \
                     php artisan key:generate --force
+
+                docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} \
+                    php artisan storage:link || true
                 '''
             }
         }
@@ -94,8 +156,10 @@ pipeline {
         stage('Build Frontend') {
             steps {
                 sh '''
-                docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} npm install
-                docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} npm run build
+                set -e
+
+                docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} \
+                    npm run build
                 '''
             }
         }
@@ -103,6 +167,8 @@ pipeline {
         stage('Database Migration') {
             steps {
                 sh '''
+                set -e
+
                 docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} \
                     php artisan migrate --force
                 '''
@@ -112,6 +178,11 @@ pipeline {
         stage('Optimize Laravel') {
             steps {
                 sh '''
+                set -e
+
+                docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} \
+                    php artisan optimize
+
                 docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} \
                     php artisan config:cache
 
@@ -127,6 +198,8 @@ pipeline {
         stage('Run Tests') {
             steps {
                 sh '''
+                set -e
+
                 docker compose -f ${COMPOSE_FILE} exec -T ${WORKSPACE_SERVICE} \
                     php artisan test
                 '''
@@ -136,14 +209,18 @@ pipeline {
         stage('Smoke Test') {
             steps {
                 sh '''
+                set -e
+
+                echo "Waiting for Nginx..."
+
                 sleep 10
 
-                curl -f ${APP_URL} || exit 1
+                curl -f ${APP_URL}
                 '''
             }
         }
 
-        stage('Cleanup') {
+        stage('Docker Cleanup') {
             steps {
                 sh '''
                 docker image prune -f
@@ -155,26 +232,42 @@ pipeline {
     post {
 
         success {
-            echo "====================================="
+            echo "======================================"
             echo "Deployment completed successfully."
-            echo "====================================="
+            echo "======================================"
         }
 
         failure {
-            echo "====================================="
-            echo "Deployment failed."
-            echo "Displaying container logs..."
-            echo "====================================="
+            script {
+                echo "======================================"
+                echo "Deployment failed."
+                echo "Container status:"
+                echo "======================================"
 
-            sh '''
-            docker compose -f ${COMPOSE_FILE} ps || true
+                sh '''
+                if [ -f "${COMPOSE_FILE}" ]; then
 
-            docker compose -f ${COMPOSE_FILE} logs --tail=100 || true
-            '''
+                    docker compose -f ${COMPOSE_FILE} ps || true
+
+                    echo ""
+                    echo "========== LAST 100 LOGS =========="
+
+                    docker compose -f ${COMPOSE_FILE} logs --tail=100 || true
+
+                else
+
+                    echo "${COMPOSE_FILE} not found."
+
+                fi
+                '''
+            }
         }
 
         always {
-            cleanWs()
+            cleanWs(
+                deleteDirs: true,
+                disableDeferredWipeout: true
+            )
         }
     }
 }
