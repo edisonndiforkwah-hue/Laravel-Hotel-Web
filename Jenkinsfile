@@ -219,8 +219,6 @@ pipeline {
                 '''
             }
         }
-
-        
     }
 
     post {
@@ -256,15 +254,12 @@ pipeline {
                 '''
             }
         }
-        stage('Docker Cleanup') {
-            steps {
-                sh '''
-                docker image prune -f
-                '''
-            }
-        }
 
         always {
+            sh '''
+            docker image prune -f
+            '''
+
             cleanWs(
                 deleteDirs: true,
                 disableDeferredWipeout: true
