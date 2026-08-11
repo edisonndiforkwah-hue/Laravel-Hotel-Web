@@ -34,18 +34,18 @@
                                  <a class="nav-link" href="{{url('/#contact')}}">Contact Us</a>
                               </li>
                            
-                              @if (Route::has('login'))
-                                  @auth
-                                  
-                                  <li class="nav-item" style="padding-right: 20px;">
-                                     <x-app-layout>
-  
-                                    </x-app-layout>
+                                @if (Route::has('login'))
+                                   @auth
 
-                                  </li>
-                                 
+                                   <li class="nav-item d-flex align-items-center" style="padding-right: 20px;">
+                                     <span class="nav-link" style="padding: 0;">Hello, {{ Auth::user()->name }}</span>
+                                     <form method="POST" action="{{ route('logout') }}" style="margin:0;">
+                                        @csrf
+                                        <button type="submit" class="btn btn-link nav-link" style="padding-left:10px;">Logout</button>
+                                     </form>
+                                   </li>
 
-                                  @else
+                                   @else
                                       <li class="nav-item" style="padding-left: 20px;">
                                          <a class="btn btn-success" href="{{ route('login') }}">Login</a>
                                       </li>
