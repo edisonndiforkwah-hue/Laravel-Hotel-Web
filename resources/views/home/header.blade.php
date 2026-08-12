@@ -39,7 +39,10 @@
 
                                    <li class="nav-item d-flex align-items-center" style="padding-right: 20px;">
                                      <span class="nav-link" style="padding: 0;">Hello, {{ Auth::user()->name }}</span>
-                                     <form method="POST" action="{{ route('logout') }}" style="margin:0;">
+                                     <a href="{{ route('profile.show') }}" class="btn btn-info btn-sm" style="margin-left: 10px; font-size: 0.875rem;">
+                                        Profile Settings
+                                     </a>
+                                     <form method="POST" action="{{ route('logout') }}" style="margin:0; margin-left: 10px;">
                                         @csrf
                                         <button type="submit" class="btn btn-link nav-link" style="padding-left:10px;">Logout</button>
                                      </form>
